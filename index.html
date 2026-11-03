@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>箭消消 v3</title><style>body{margin:0;background:#f3e4c4;padding:10px 0}</style></head><body><div id="app"></div><script>const DX = [0, 1, 0, -1];
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>箭消消</title><style>body{margin:0;background:#f3e4c4;padding:10px 0}</style></head><body><div id="app"></div><script>const DX = [0, 1, 0, -1];
 const DY = [-1, 0, 1, 0];
 const ROWS = 3;
 const ROWLEN = 5;
@@ -254,6 +254,19 @@ const STYLE = `
 .jx .tool b{display:inline;font-size:24px;margin:0}
 .jx .vid{position:absolute;left:8px;top:6px;background:#e8352f;color:#fff;font-size:9px;border-radius:5px;padding:1px 4px}
 .jx .pt.star{width:13px;height:13px;background:#ffd84a !important;clip-path:polygon(50% 0,61% 39%,100% 50%,61% 61%,50% 100%,39% 61%,0 50%,39% 39%)}
+.jx .hand{position:absolute;z-index:7;font-size:34px;pointer-events:none;animation:handtap 1s infinite;filter:drop-shadow(0 3px 2px rgba(0,0,0,.3))}
+@keyframes handtap{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-6px,-10px) scale(.9)}}
+.jx .twarn{color:#e8352f;font-weight:800;font-size:13px;text-align:center;height:18px;margin-top:4px;animation:pulse .5s infinite alternate}
+.jx .tray.danger{border-color:#e8574f;box-shadow:inset 0 2px 5px rgba(0,0,0,.2),0 0 14px rgba(232,53,47,.45)}
+.jx .near{background:#fff0d6;border-radius:12px;padding:8px;margin:10px 0 0;color:#b5651d;font-weight:800}
+.jx .set{display:flex;justify-content:space-between;align-items:center;padding:12px 6px;border-bottom:1px solid #efe3c8;font-weight:700}
+.jx .sw{width:52px;height:30px;border-radius:999px;background:#d8cdb6;position:relative}
+.jx .sw.on{background:#45c06a}.jx .sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .2s}.jx .sw.on::after{left:25px}
+.jx .streak{display:flex;gap:4px;justify-content:center;margin:8px 0 2px}.jx .streak i{font-style:normal;width:34px;font-size:11px;padding:3px 0;border-radius:8px;background:#fff;color:#a08a60;font-weight:800}.jx .streak i.d{background:#ffd84a;color:#7a5200}
+.jx .ar{touch-action:manipulation}
+.jx .pill{white-space:nowrap}
+.jx .modal .big{font-size:16px;white-space:nowrap}
+.jx .streak{margin:10px 0 14px}.jx .streak i{line-height:1.25}
 `;
 function build(html, parent) {
   const stack = [parent];
@@ -301,6 +314,8 @@ function arrowSvg(color, d) {
   s.appendChild(dot);
   return s;
 }
+const SIGN = [100, 120, 150, 180, 220, 260, 400];
+const TOOLP = { hint: 150, undo: 100, shuf: 200 };
 function startGame(root, LEVELS) {
   let mem = { level: 0, coins: 0, stars: [], sign: "" };
   const load = () => {
@@ -319,9 +334,13 @@ function startGame(root, LEVELS) {
     }
   };
   let save = load();
+  const buzz = (ms) => {
+    if (vib && navigator.vibrate) navigator.vibrate(ms);
+  };
   let dead = false;
   let ac = null;
-  let muted = false;
+  let muted = !!save.muted;
+  let vib = save.vib !== false;
   const tone = (f, dur, type = "sine", vol = 0.12, slide = 0) => {
     if (muted) return;
     try {
@@ -352,10 +371,11 @@ function startGame(root, LEVELS) {
     build(html, e);
     return e;
   };
-  const toast = (t) => {
+  const toast = (t, ms = 1600) => {
+    wrap.querySelectorAll(".toast").forEach((x) => x.remove());
     const e = h("div", "toast", t);
     wrap.appendChild(e);
-    setTimeout(() => e.remove(), 1300);
+    setTimeout(() => e.remove(), ms);
   };
   const showAd = (label, done) => {
     const e = h("div", "ad", `<div>\u6A21\u62DF\u6FC0\u52B1\u5E7F\u544A</div><div class="t">3</div><div style="font-size:13px;opacity:.7">${label}</div>`);
@@ -410,27 +430,37 @@ function startGame(root, LEVELS) {
     wrap.appendChild(b);
     const cards = h("div", "cards");
     const d = h("button", "card", "\u{1F4C5} \u6BCF\u65E5\u6311\u6218");
+    if (save.daily === today) d.textContent = "\u{1F4C5} \u4ECA\u65E5\u6311\u6218 \u2713";
     d.onclick = () => {
       const k = 5 + Math.floor(Date.now() / 864e5) % (LEVELS.length - 5);
-      toast("\u4ECA\u65E5\u6311\u6218\uFF1A\u7B2C " + (k + 1) + " \u5173");
-      setTimeout(() => play(k), 600);
+      daily = save.daily !== today;
+      toast("\u4ECA\u65E5\u6311\u6218\uFF1A\u7B2C " + (k + 1) + " \u5173" + (daily ? " \xB7 \u901A\u5173 +200 \u91D1\u5E01" : "\uFF08\u4ECA\u65E5\u5956\u52B1\u5DF2\u9886\uFF09"), 2e3);
+      setTimeout(() => play(k), 700);
     };
-    const s = h("button", "card", save.sign === today ? "\u{1F381} \u5DF2\u7B7E\u5230 \u2713" : "\u{1F381} \u6BCF\u65E5\u7B7E\u5230");
+    const yest = new Date(Date.now() - 864e5).toDateString();
+    const stk = save.sign === today || save.sign === yest ? save.streak || 0 : 0;
+    const s = h("button", "card", save.sign === today ? `\u{1F381} \u5DF2\u7B7E\u5230 \u2713 \u8FDE\u7EED${stk}\u5929` : `\u{1F381} \u6BCF\u65E5\u7B7E\u5230 +${SIGN[stk % 7]}`);
     s.onclick = () => {
       if (save.sign === today) {
-        toast("\u4ECA\u5929\u5DF2\u7B7E\u5230");
+        toast("\u4ECA\u5929\u5DF2\u7B7E\u5230\uFF0C\u660E\u5929\u518D\u6765");
         return;
       }
+      const n = stk + 1;
+      const g = SIGN[stk % 7];
       save.sign = today;
-      save.coins += 100;
+      save.streak = n;
+      save.coins += g;
       store(save);
       tone(660, 0.2);
-      toast("\u7B7E\u5230 +100 \u91D1\u5E01");
+      toast(`\u7B7E\u5230\u7B2C ${n} \u5929 +${g} \u91D1\u5E01`);
       home();
     };
     cards.appendChild(d);
     cards.appendChild(s);
     wrap.appendChild(cards);
+    const sr = h("div", "streak");
+    for (let q = 0; q < 7; q++) sr.appendChild(h("i", stk > 0 && q < (stk - 1) % 7 + 1 ? "d" : "", `D${q + 1}<br>${SIGN[q]}`));
+    wrap.appendChild(sr);
     const grid = h("div", "lvls");
     LEVELS.forEach((_l, i) => {
       const st = save.stars[i] || 0;
@@ -443,9 +473,29 @@ function startGame(root, LEVELS) {
     });
     wrap.appendChild(grid);
   };
+  let daily = false;
+  let wrong = 0;
+  let handEl = null;
   const snap = () => {
     hist.push({ alive: alive.slice(), locks: locks.slice(), rows: rows.map((r) => ({ c: r.c, n: r.n })), steps, combo, bursts });
     if (hist.length > 40) hist.shift();
+  };
+  const k5 = 5 + Math.floor(Date.now() / 864e5) % (LEVELS.length - 5);
+  const guide = () => {
+    if (handEl) {
+      handEl.remove();
+      handEl = null;
+    }
+    if (li > 1 || over) return;
+    const j = lv.arrows.findIndex((_a, k) => alive[k] && locks[k] === 0 && canFly(lv, alive, k));
+    const el = cellEls.get(j);
+    if (!el) return;
+    const r = rel(el);
+    const hd = h("div", "hand", "\u{1F446}");
+    hd.style.left = r.x + r.w * 0.45 + "px";
+    hd.style.top = r.y + r.h * 0.5 + "px";
+    wrap.appendChild(hd);
+    handEl = hd;
   };
   const play = (i) => {
     li = i;
@@ -464,8 +514,10 @@ function startGame(root, LEVELS) {
     busy = false;
     hintIdx = -1;
     over = false;
+    wrong = 0;
+    if (k5 !== i) daily = false;
     draw();
-    if (i === 0) toast("\u70B9\u7BAD\u5934\uFF0C\u8BA9\u5B83\u6CBF\u65B9\u5411\u98DE\u51FA");
+    if (i === 0) guide();
     else if (lv.arrows.some((a) => a.l > 0) && !LEVELS.slice(0, i).some((q) => q.arrows.some((a) => a.l > 0))) toast("\u65B0\u673A\u5173\uFF1A\u9501\u94FE\u5757\u8981\u5148\u70B9\u4E00\u4E0B\u89E3\u9501");
     else if (lv.arrows.some((a) => a.i > 0) && !LEVELS.slice(0, i).some((q) => q.arrows.some((a) => a.i > 0))) toast("\u65B0\u673A\u5173\uFF1A\u51B0\u5757\u5728\u98DE\u51FA N \u4E2A\u7BAD\u5934\u540E\u878D\u5316");
   };
@@ -480,11 +532,7 @@ function startGame(root, LEVELS) {
     top.appendChild(h("div", "grow"));
     top.appendChild(h("div", "pill steps" + (steps <= 3 ? " low" : ""), `\u6B65\u6570 ${steps}`));
     const gear = h("button", "pill gear", muted ? "\u{1F507}" : "\u2699");
-    gear.onclick = () => {
-      muted = !muted;
-      gear.textContent = muted ? "\u{1F507}" : "\u2699";
-      toast(muted ? "\u5DF2\u9759\u97F3" : "\u97F3\u6548\u5DF2\u5F00\u542F");
-    };
+    gear.onclick = settings;
     top.appendChild(gear);
     wrap.appendChild(top);
     wrap.appendChild(h("div", "meta", `\u5269\u4F59 ${alive.filter((v) => v).length} \xB7 \u6700\u4F18 ${lv.opt} \u6B65 \xB7 \u4F59\u91CF <b>${lv.steps - lv.opt}</b>`));
@@ -527,14 +575,17 @@ function startGame(root, LEVELS) {
       }
       tr.appendChild(rw);
     });
+    const used = rows.filter((r) => r.n > 0).length;
+    if (used >= ROWS - 1) tr.classList.add("danger");
     wrap.appendChild(tr);
     trayEl = tr;
+    wrap.appendChild(h("div", "twarn", used >= ROWS ? "\u26A0 \u6536\u96C6\u69FD\u5DF2\u6EE1\uFF0C\u53EA\u80FD\u653E\u540C\u8272\uFF01" : used === ROWS - 1 ? "\u26A0 \u53EA\u5269 1 \u884C\u7A7A\u4F4D\uFF0C\u6CE8\u610F\u989C\u8272" : ""));
     const cb = h("div", "combo", combo > 1 ? `COMBO \xD7${combo}` : "");
     wrap.appendChild(cb);
     comboEl = cb;
     const tl = h("div", "tools");
     const mk = (icon, name, n, fn) => {
-      const b = h("button", "tool", `<b>${icon}</b>${name} \xD7${n}${n > 0 && icon !== "\u{1F4A1}" ? "" : '<span class="vid">\u25B6</span>'}`);
+      const b = h("button", "tool", `<b>${icon}</b>${name} ${n > 0 ? "\xD7" + n : "+1"}${n > 0 ? "" : '<span class="vid">\u25B6</span>'}`);
       b.onclick = fn;
       tl.appendChild(b);
     };
@@ -545,6 +596,7 @@ function startGame(root, LEVELS) {
     const fx = h("div", "fx");
     wrap.appendChild(fx);
     fxEl = fx;
+    if (li <= 1 && !over) requestAnimationFrame(guide);
   };
   const rel = (el) => {
     const a = el.getBoundingClientRect(), b = wrap.getBoundingClientRect();
@@ -609,7 +661,34 @@ function startGame(root, LEVELS) {
     if (tools[k] > 0) {
       tools[k]--;
       run();
-    } else showAd("\u770B\u5B8C\u83B7\u5F97 1 \u6B21" + (k === "hint" ? "\u63D0\u793A" : k === "undo" ? "\u64A4\u9500" : "\u6D17\u724C"), run);
+      return;
+    }
+    const nm = k === "hint" ? "\u63D0\u793A" : k === "undo" ? "\u64A4\u9500" : "\u6D17\u724C";
+    const price = TOOLP[k];
+    const md = h("div", "modal", `<h2>\u83B7\u5F97 1 \u6B21${nm}</h2>`);
+    const m = modal(md);
+    const ad = h("button", "big red", "\u25B6 \u770B\u89C6\u9891 \u514D\u8D39\u83B7\u5F97");
+    ad.onclick = () => {
+      m.remove();
+      showAd("\u770B\u5B8C\u83B7\u5F97 1 \u6B21" + nm, run);
+    };
+    const cb = h("button", "big", `<span class="coin"></span> ${price} \u91D1\u5E01\u8D2D\u4E70`);
+    cb.onclick = () => {
+      if (save.coins < price) {
+        toast("\u91D1\u5E01\u4E0D\u8DB3\uFF0C\u53EF\u7B7E\u5230\u6216\u770B\u89C6\u9891");
+        return;
+      }
+      save.coins -= price;
+      store(save);
+      m.remove();
+      run();
+      toast(`-${price} \u91D1\u5E01`);
+    };
+    const x = h("button", "link", "\u53D6\u6D88");
+    x.onclick = () => m.remove();
+    md.appendChild(ad);
+    md.appendChild(cb);
+    md.appendChild(x);
   };
   const particles = (x, y, color, n) => {
     if (!fxEl) return;
@@ -663,10 +742,13 @@ function startGame(root, LEVELS) {
     }
     const bl = blocker(lv, alive, j);
     if (bl >= 0) {
+      wrong++;
+      const free = li < 3 || wrong === 1;
       snap();
-      steps--;
+      if (!free) steps--;
       combo = 0;
       tone(160, 0.16, "square", 0.07, 0.7);
+      toast(free ? wrong === 1 && li >= 3 ? "\u88AB\u6321\u4F4F\u4E86\uFF01\u672C\u5173\u9996\u6B21\u8BEF\u70B9\u4E0D\u6263\u6B65" : "\u88AB\u6321\u4F4F\u4E86\uFF0C\u5148\u79FB\u5F00\u524D\u9762\u7684\u7BAD\u5934" : "\u88AB\u6321\u4F4F -1 \u6B65");
       const svg = el.querySelector("svg");
       const dist = Math.max(Math.abs(lv.arrows[bl].x - a.x), Math.abs(lv.arrows[bl].y - a.y)) - 1;
       const r2 = rel(el);
@@ -678,12 +760,27 @@ function startGame(root, LEVELS) {
         void be.offsetWidth;
         be.classList.add("shake");
       }, 160 + dist * 20);
-      if (navigator.vibrate) navigator.vibrate(30);
+      buzz(30);
       setSteps();
       if (steps <= 0) {
         over = true;
         setTimeout(() => fail("steps"), 500);
       }
+      return;
+    }
+    if (handEl) {
+      handEl.remove();
+      handEl = null;
+    }
+    if (trayAdd(rows, a.c) === null) {
+      if (trayEl) {
+        trayEl.classList.remove("shake");
+        void trayEl.offsetWidth;
+        trayEl.classList.add("shake");
+      }
+      buzz(60);
+      over = true;
+      setTimeout(() => fail("tray"), 300);
       return;
     }
     snap();
@@ -804,6 +901,10 @@ function startGame(root, LEVELS) {
     };
   };
   const modal = (inner) => {
+    if (handEl) {
+      handEl.remove();
+      handEl = null;
+    }
     const m = h("div", "mask");
     m.appendChild(inner);
     wrap.appendChild(m);
@@ -813,7 +914,9 @@ function startGame(root, LEVELS) {
     over = true;
     tone(300, 0.3, "sawtooth", 0.06, 0.6);
     setTimeout(() => tone(200, 0.4, "sawtooth", 0.06, 0.6), 200);
-    const md = h("div", "modal", `<h2>${why === "tray" ? "\u6536\u96C6\u69FD\u5DF2\u6EE1" : "\u6B65\u6570\u7528\u5B8C\u4E86"}</h2><div style="color:#8a7650">${why === "tray" ? "\u89C2\u770B\u5E7F\u544A\u53EF\u6E05\u7A7A\u4E00\u884C\uFF0C\u7EE7\u7EED\u672C\u5C40" : "\u89C2\u770B\u5E7F\u544A +5 \u6B65\uFF0C\u7EE7\u7EED\u672C\u5C40"}</div>`);
+    const left = alive.filter((v) => v).length;
+    const pct = Math.round(100 * (1 - left / lv.arrows.length));
+    const md = h("div", "modal", `<h2>${why === "tray" ? "\u6536\u96C6\u69FD\u5DF2\u6EE1" : "\u6B65\u6570\u7528\u5B8C\u4E86"}</h2><div class="near">${pct >= 70 ? "\u5C31\u5DEE\u4E00\u70B9\uFF01" : ""}\u53EA\u5269 ${left} \u4E2A\u7BAD\u5934 \xB7 \u5DF2\u5B8C\u6210 ${pct}%</div><div style="color:#8a7650;margin-top:8px">${why === "tray" ? "\u770B\u89C6\u9891\u6E05\u7A7A\u4E00\u884C\uFF0C\u7EE7\u7EED\u672C\u5C40" : "\u770B\u89C6\u9891 +5 \u6B65\uFF0C\u7EE7\u7EED\u672C\u5C40"}</div>`);
     const b = h("button", "big", why === "tray" ? "\u25B6 \u89C2\u770B\u5E7F\u544A \u6D88\u9664\u4E00\u884C" : "\u25B6 \u89C2\u770B\u5E7F\u544A +5 \u6B65\u6570");
     const m = modal(md);
     b.onclick = () => showAd("\u770B\u5B8C\u7EE7\u7EED\u672C\u5C40", () => {
@@ -833,8 +936,66 @@ function startGame(root, LEVELS) {
     const hm = h("button", "link", "\u3000\u8FD4\u56DE\u9996\u9875");
     hm.onclick = home;
     md.appendChild(b);
+    if (hist.length) {
+      const u = h("button", "big", `<span class="coin"></span> ${TOOLP.undo} \u91D1\u5E01 \u64A4\u9500 1 \u6B65`);
+      u.style.background = "linear-gradient(#ffc85a,#f0a020)";
+      u.onclick = () => {
+        if (save.coins < TOOLP.undo) {
+          toast("\u91D1\u5E01\u4E0D\u8DB3");
+          return;
+        }
+        const s = hist.pop();
+        save.coins -= TOOLP.undo;
+        store(save);
+        m.remove();
+        alive = s.alive;
+        locks = s.locks;
+        rows = s.rows;
+        steps = s.steps;
+        combo = s.combo;
+        bursts = s.bursts;
+        over = false;
+        draw();
+      };
+      md.appendChild(u);
+    }
     md.appendChild(r);
     md.appendChild(hm);
+  };
+  const settings = () => {
+    const md = h("div", "modal", "<h2>\u8BBE\u7F6E</h2>");
+    const m = modal(md);
+    const row = (name, on, fn) => {
+      const rr = h("div", "set", name);
+      const sw = h("button", "sw" + (on ? " on" : ""));
+      sw.onclick = () => {
+        const v = !sw.classList.contains("on");
+        sw.classList.toggle("on", v);
+        fn(v);
+      };
+      rr.appendChild(sw);
+      md.appendChild(rr);
+    };
+    row("\u{1F50A} \u97F3\u6548", !muted, (v) => {
+      muted = !v;
+      save.muted = muted;
+      store(save);
+    });
+    row("\u{1F4F3} \u9707\u52A8", vib, (v) => {
+      vib = v;
+      save.vib = v;
+      store(save);
+    });
+    md.appendChild(h("div", "", '<div style="text-align:left;font-size:13px;color:#8a7650;margin-top:10px;line-height:1.6">\u73A9\u6CD5\uFF1A\u70B9\u7BAD\u5934\u6CBF\u65B9\u5411\u98DE\u51FA\uFF0C\u88AB\u6321\u4F4F\u4F1A\u5F39\u56DE\u3002\u98DE\u51FA\u7684\u7BAD\u5934\u6309\u989C\u8272\u8FDB\u6536\u96C6\u69FD\uFF0C\u540C\u8272 5 \u4E2A\u6D88\u9664\u4E00\u884C\uFF0C3 \u884C\u90FD\u5360\u6EE1\u5C31\u5931\u8D25\u3002\u{1F512} \u9501\u94FE\u5148\u70B9\u4E00\u4E0B\u89E3\u9501\uFF1B\u2744 \u51B0\u5757\u98DE\u51FA N \u4E2A\u7BAD\u5934\u540E\u878D\u5316\u3002</div>'));
+    const rs = h("button", "big", "\u91CD\u65B0\u5F00\u59CB\u672C\u5173");
+    rs.onclick = () => {
+      m.remove();
+      play(li);
+    };
+    const c = h("button", "link", "\u7EE7\u7EED\u6E38\u620F");
+    c.onclick = () => m.remove();
+    md.appendChild(rs);
+    md.appendChild(c);
   };
   const win = () => {
     over = true;
@@ -844,9 +1005,14 @@ function startGame(root, LEVELS) {
     [523, 659, 784, 1046].forEach((f, k) => setTimeout(() => tone(f, 0.25, "triangle", 0.12), k * 110));
     save.stars[li] = Math.max(save.stars[li] || 0, st);
     save.level = Math.max(save.level, Math.min(li + 1, LEVELS.length - 1));
-    save.coins += coins;
+    const db = daily ? 200 : 0;
+    if (daily) {
+      save.daily = (/* @__PURE__ */ new Date()).toDateString();
+      daily = false;
+    }
+    save.coins += coins + db;
     store(save);
-    const md = h("div", "modal", `<h2 style="color:#36a957">\u592A\u68D2\u4E86\uFF01</h2><div class="stars">${"\u2605".repeat(st)}<i>${"\u2605".repeat(3 - st)}</i></div><div style="font-size:17px;font-weight:700">Level ${li + 1} \u5B8C\u6210\uFF01</div><div style="font-size:24px;font-weight:900;margin:8px"><span class="coin"></span>\xD7${coins}</div><div style="color:#e44c47;font-weight:800">\u6700\u9AD8 COMBO \xD7${Math.max(best, 1)}</div>`);
+    const md = h("div", "modal", `<h2 style="color:#36a957">\u592A\u68D2\u4E86\uFF01</h2><div class="stars">${"\u2605".repeat(st)}<i>${"\u2605".repeat(3 - st)}</i></div><div style="font-size:17px;font-weight:700">Level ${li + 1} \u5B8C\u6210\uFF01</div><div style="font-size:24px;font-weight:900;margin:8px"><span class="coin"></span>\xD7${coins}${db ? ` <small style="color:#e44c47">+${db} \u6BCF\u65E5\u6311\u6218</small>` : ""}</div><div style="color:#e44c47;font-weight:800">\u6700\u9AD8 COMBO \xD7${Math.max(best, 1)}</div>`);
     const m = modal(md);
     const r = rel(md);
     particles(r.x + r.w / 2, r.y + 40, "#f2b423", 24);

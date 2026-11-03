@@ -158,7 +158,174 @@ function generate(seed, w, h, target, colors, conc, locks, ices, slack) {
   const opt = n + arr.filter((a) => a.l > 0).length;
   return { w, h, arrows: arr.sort(() => R() - 0.5), steps: opt + slack, opt };
 }
+let EK = { c0: 3, every0: 3, batch0: 2, sc: 1650, init: 0.5, clear0: 0.75 };
+function eParams(s) {
+  const L = s.score / EK.sc;
+  return {
+    colors: Math.min(6, EK.c0 + Math.floor(L)),
+    every: Math.max(2, EK.every0 - Math.floor(L / 2.5)),
+    batch: Math.min(4, EK.batch0 + Math.floor(L / 2)),
+    lockP: L >= 1 ? Math.min(0.15, 0.05 + 0.03 * L) : 0,
+    iceP: L >= 2 ? Math.min(0.12, 0.03 + 0.02 * L) : 0,
+    clearP: Math.max(0.35, EK.clear0 - 0.08 * L)
+  };
+}
+function eClear(s, i, d) {
+  return rayCells(s.w, s.h, i % s.w, Math.floor(i / s.w), d).every((c) => !s.g[c]);
+}
+function eBlocker(s, i) {
+  const a = s.g[i];
+  for (const c of rayCells(s.w, s.h, i % s.w, Math.floor(i / s.w), a.d)) if (s.g[c]) return c;
+  return -1;
+}
+function eCanFly(s, i) {
+  const a = s.g[i];
+  return !!a && a.f <= 0 && a.l === 0 && eBlocker(s, i) < 0;
+}
+function eSpawn(s, n) {
+  const p = eParams(s);
+  const out = [];
+  const empty = s.g.map((v, i) => v ? -1 : i).filter((i) => i >= 0);
+  const inTray = s.rows.filter((r) => r.n > 0).map((r) => r.c);
+  for (let k = 0; k < n && empty.length; k++) {
+    const i = empty.splice(Math.floor(s.R() * empty.length), 1)[0];
+    let c = Math.floor(s.R() * p.colors);
+    if (inTray.length && s.R() < 0.35) c = inTray[Math.floor(s.R() * inTray.length)];
+    const clear = [0, 1, 2, 3].filter((d2) => eClear(s, i, d2));
+    const d = clear.length && s.R() < p.clearP ? clear[Math.floor(s.R() * clear.length)] : Math.floor(s.R() * 4);
+    const r = s.R();
+    s.g[i] = { c, d, l: r < p.lockP ? 1 : 0, f: r >= p.lockP && r < p.lockP + p.iceP ? 3 + Math.floor(s.R() * 3) : 0 };
+    out.push(i);
+  }
+  eFix(s);
+  return out;
+}
+function eFix(s) {
+  let fly = s.g.filter((_v, i) => eCanFly(s, i)).length;
+  const idx = s.g.map((_v, i) => i).sort(() => s.R() - 0.5);
+  for (const i of idx) {
+    if (fly >= 2) break;
+    const a = s.g[i];
+    if (!a || a.l || a.f > 0 || eCanFly(s, i)) continue;
+    const ds = [0, 1, 2, 3].filter((d) => eClear(s, i, d));
+    if (ds.length) {
+      a.d = ds[Math.floor(s.R() * ds.length)];
+      fly++;
+    }
+  }
+}
+function eNew(seed, w = 7, h = 8) {
+  const s = { w, h, g: new Array(w * h).fill(null), rows: [], score: 0, moves: 0, combo: 0, since: 9, over: "", R: rng(seed), bursts: 0, maxCombo: 0, revived: false };
+  for (let k = 0; k < ROWS; k++) s.rows.push({ c: 0, n: 0 });
+  eSpawn(s, Math.round(w * h * EK.init));
+  return s;
+}
+function eFits(s, c) {
+  return trayAdd(s.rows, c) !== null;
+}
+function eMoves(s) {
+  return s.g.map((_v, i) => i).filter((i) => {
+    const a = s.g[i];
+    return !!a && (a.l > 0 && a.f <= 0 || eCanFly(s, i) && eFits(s, a.c));
+  });
+}
+function eCheck(s) {
+  if (s.over) return;
+  if (s.g.every((v) => !!v) && !eMoves(s).length) {
+    s.over = "board";
+    return;
+  }
+  if (!eMoves(s).length) s.over = s.g.some((v, i) => !!v && eCanFly(s, i)) ? "tray" : "board";
+}
+function eTap(s, i) {
+  const o = { kind: "fly", burst: -1, row: -1, pos: -1, pts: 0, clearTray: false, clearBoard: false, spawned: [], blocker: -1 };
+  const a = s.g[i];
+  if (!a || s.over) {
+    o.kind = "block";
+    return o;
+  }
+  if (a.f > 0) {
+    o.kind = "frozen";
+    return o;
+  }
+  if (a.l > 0) {
+    a.l = 0;
+    o.kind = "unlock";
+    s.moves++;
+    tick(s, o);
+    return o;
+  }
+  const b = eBlocker(s, i);
+  if (b >= 0) {
+    o.kind = "block";
+    o.blocker = b;
+    return o;
+  }
+  const t = trayAdd(s.rows, a.c);
+  if (!t) {
+    o.kind = "nofit";
+    return o;
+  }
+  s.g[i] = null;
+  s.rows = t.rows;
+  o.row = t.row;
+  o.pos = t.pos;
+  s.moves++;
+  for (const q of s.g) if (q && q.f > 0) q.f--;
+  if (t.burst >= 0) {
+    s.combo = s.since <= 3 && s.bursts > 0 ? s.combo + 1 : 1;
+    s.since = 0;
+    s.bursts++;
+    s.maxCombo = Math.max(s.maxCombo, s.combo);
+    o.burst = t.burst;
+    o.pts = 100 * s.combo;
+    if (s.rows.every((r) => r.n === 0)) {
+      o.clearTray = true;
+      o.pts += 300;
+    }
+  } else {
+    s.since++;
+    if (s.since > 3) s.combo = 0;
+  }
+  if (s.g.every((v) => !v)) {
+    o.clearBoard = true;
+    o.pts += 1e3;
+  }
+  s.score += o.pts;
+  tick(s, o);
+  return o;
+}
+function tick(s, o) {
+  const p = eParams(s);
+  if (o.clearBoard) o.spawned = eSpawn(s, Math.round(s.w * s.h * 0.4));
+  else if (s.moves % p.every === 0) o.spawned = eSpawn(s, p.batch);
+  else eFix(s);
+  eCheck(s);
+}
+function eRevive(s) {
+  s.over = "";
+  s.revived = true;
+  let k = 0;
+  s.rows.forEach((r, i) => {
+    if (r.n > s.rows[k].n) k = i;
+  });
+  s.rows[k] = { c: 0, n: 0 };
+  const occ = s.g.map((v, i) => v ? i : -1).filter((i) => i >= 0).sort(() => s.R() - 0.5);
+  for (const i of occ.slice(0, Math.floor(occ.length / 3))) s.g[i] = null;
+  eFix(s);
+  eCheck(s);
+}
 const STYLE = `
+.jx .escore{font-size:44px;font-weight:900;text-align:center;color:#5a3d12;line-height:1.05;text-shadow:0 3px 0 #fff3d6}
+.jx .erec{text-align:center;font-size:13px;font-weight:800;color:#a0773a;height:18px;margin-bottom:4px}
+.jx .erec.new{color:#e8352f;animation:pulse .5s infinite alternate}
+.jx .ar.spawn{animation:cpop .3s ease-out}
+.jx .eword{position:absolute;left:0;right:0;top:34%;text-align:center;font-size:40px;font-weight:900;font-style:italic;pointer-events:none;z-index:30;-webkit-text-stroke:2px #fff;animation:ew 1.1s ease-out forwards}
+.jx .eword.c2{color:#3f8fe8}.jx .eword.c3{color:#8e6fe0}.jx .eword.c4{color:#ef5b57;font-size:46px}.jx .eword.c5{color:#f2a514;font-size:34px}
+@keyframes ew{0%{transform:scale(.3);opacity:0}20%{transform:scale(1.15);opacity:1}35%{transform:scale(1)}80%{opacity:1}100%{transform:translateY(-40px);opacity:0}}
+.jx .eflash{position:absolute;inset:0;pointer-events:none;z-index:29;background:radial-gradient(circle,rgba(255,240,170,.9),rgba(255,200,80,.3) 60%,transparent);animation:fade .8s reverse forwards}
+.jx .big.sec{background:linear-gradient(#ffc85a,#f0a020);font-size:16px;padding:10px}
+
 .jx{position:relative;max-width:440px;margin:0 auto;min-height:760px;background:radial-gradient(120% 60% at 50% 0%,#f2fbf4 0%,#e3f4e8 45%,#fbf6e7 100%);font-family:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,sans-serif;color:#3b3a36;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:manipulation;border-radius:22px;padding-bottom:10px;-webkit-tap-highlight-color:transparent}
 .jx *{box-sizing:border-box}
 .jx button{font-family:inherit;cursor:pointer;border:none;color:#3b3a36;transition:transform .12s ease,box-shadow .12s ease,filter .12s}
@@ -425,7 +592,10 @@ function startGame(root, LEVELS) {
     wrap.appendChild(h("div", "title", `\u7BAD<span>\u6D88</span>\u6D88`));
     wrap.appendChild(h("div", "sub", "\u770B\u51C6\u65B9\u5411\uFF0C\u6392\u597D\u987A\u5E8F\uFF0C\u522B\u8BA9\u6536\u96C6\u69FD\u585E\u6EE1"));
     const cur = Math.min(save.level, LEVELS.length - 1);
-    const b = h("button", "big", `\u5F00\u59CB\u6E38\u620F<small>Level ${cur + 1}${isHard(cur) ? " \xB7 \u96BE\u5173" : ""}</small>`);
+    const eb = h("button", "big", `\u65E0\u5C3D\u6A21\u5F0F<small>\u{1F3C6} \u6700\u9AD8 ${save.eb || 0}</small>`);
+    eb.onclick = ePlay;
+    wrap.appendChild(eb);
+    const b = h("button", "big sec", `\u5173\u5361\u6A21\u5F0F \xB7 Level ${cur + 1}${isHard(cur) ? " \xB7 \u96BE\u5173" : ""}`);
     b.onclick = () => play(cur);
     wrap.appendChild(b);
     const cards = h("div", "cards");
@@ -498,6 +668,7 @@ function startGame(root, LEVELS) {
     handEl = hd;
   };
   const play = (i) => {
+    es = null;
     li = i;
     lv = LEVELS[i];
     alive = lv.arrows.map(() => true);
@@ -987,10 +1158,11 @@ function startGame(root, LEVELS) {
       store(save);
     });
     md.appendChild(h("div", "", '<div style="text-align:left;font-size:13px;color:#8a7650;margin-top:10px;line-height:1.6">\u73A9\u6CD5\uFF1A\u70B9\u7BAD\u5934\u6CBF\u65B9\u5411\u98DE\u51FA\uFF0C\u88AB\u6321\u4F4F\u4F1A\u5F39\u56DE\u3002\u98DE\u51FA\u7684\u7BAD\u5934\u6309\u989C\u8272\u8FDB\u6536\u96C6\u69FD\uFF0C\u540C\u8272 5 \u4E2A\u6D88\u9664\u4E00\u884C\uFF0C3 \u884C\u90FD\u5360\u6EE1\u5C31\u5931\u8D25\u3002\u{1F512} \u9501\u94FE\u5148\u70B9\u4E00\u4E0B\u89E3\u9501\uFF1B\u2744 \u51B0\u5757\u98DE\u51FA N \u4E2A\u7BAD\u5934\u540E\u878D\u5316\u3002</div>'));
-    const rs = h("button", "big", "\u91CD\u65B0\u5F00\u59CB\u672C\u5173");
+    const rs = h("button", "big", es ? "\u91CD\u65B0\u5F00\u59CB" : "\u91CD\u65B0\u5F00\u59CB\u672C\u5173");
     rs.onclick = () => {
       m.remove();
-      play(li);
+      if (es) ePlay();
+      else play(li);
     };
     const c = h("button", "link", "\u7EE7\u7EED\u6E38\u620F");
     c.onclick = () => m.remove();
@@ -1031,6 +1203,268 @@ function startGame(root, LEVELS) {
     };
     md.appendChild(dbl);
     md.appendChild(nx);
+  };
+  let es = null;
+  let eBusy = false;
+  let eRec = false;
+  let eBest0 = 0;
+  const ePlay = () => {
+    es = eNew((Date.now() ^ Math.random() * 1e9) >>> 0);
+    eBusy = false;
+    eRec = false;
+    eBest0 = save.eb || 0;
+    over = false;
+    eDraw([]);
+    if (!save.eg) {
+      save.eg = true;
+      store(save);
+      toast("\u70B9\u7BAD\u5934\u98DE\u51FA \u2192 \u540C\u8272 5 \u4E2A\u6D88\u4E00\u884C \xB7 \u8FDE\u7EED\u6D88\u9664\u53E0 COMBO", 2600);
+    }
+  };
+  const eWord = (c) => c >= 4 ? "Unbelievable!" : c === 3 ? "Excellent!" : c === 2 ? "Great!" : "";
+  const eDraw = (fresh) => {
+    const s = es;
+    wrap.replaceChildren();
+    cellEls.clear();
+    const top = h("div", "top");
+    const back = h("button", "pill back", "\u2039");
+    back.onclick = () => {
+      es = null;
+      home();
+    };
+    top.appendChild(back);
+    top.appendChild(h("div", "pill", `\u{1F3C6} ${Math.max(save.eb || 0, s.score)}`));
+    top.appendChild(h("div", "grow"));
+    const p = eParams(s);
+    top.appendChild(h("div", "pill", `\u96BE\u5EA6 ${p.colors - 2}`));
+    const gear = h("button", "pill gear", muted ? "\u{1F507}" : "\u2699");
+    gear.onclick = settings;
+    top.appendChild(gear);
+    wrap.appendChild(top);
+    wrap.appendChild(h("div", "escore", String(s.score)));
+    const gap = eBest0 - s.score;
+    wrap.appendChild(h("div", "erec" + (eRec ? " new" : ""), eRec ? "\u{1F389} \u65B0\u7EAA\u5F55\uFF01" : eBest0 > 0 && gap > 0 && gap <= Math.max(300, eBest0 * 0.2) ? `\u{1F525} \u8DDD\u79BB\u7EAA\u5F55\u53EA\u5DEE ${gap} \u5206\uFF01` : `\u6BCF ${p.every} \u6B65\u8865\u5145 ${p.batch} \u4E2A\u7BAD\u5934`));
+    const bd = h("div", "board");
+    bd.style.gridTemplateColumns = `repeat(${s.w},1fr)`;
+    for (let c = 0; c < s.w * s.h; c++) {
+      const a = s.g[c];
+      if (!a) {
+        bd.appendChild(h("div", "cell"));
+        continue;
+      }
+      const e = h("button", "ar" + (fresh.indexOf(c) >= 0 ? " spawn" : ""));
+      e.style.setProperty("--c", PAL[a.c]);
+      e.appendChild(arrowSvg("#ffffff", a.d));
+      if (a.l > 0) e.appendChild(h("div", "lockc"));
+      if (a.f > 0) e.appendChild(h("div", "ice", String(a.f)));
+      e.onclick = () => eTapUI(c, e);
+      cellEls.set(c, e);
+      bd.appendChild(e);
+    }
+    wrap.appendChild(bd);
+    boardEl = bd;
+    const tr = h("div", "tray");
+    s.rows.forEach((r) => {
+      const rw = h("div", "trow");
+      for (let k = 0; k < ROWLEN; k++) {
+        const sl = h("div", "slot" + (k < r.n ? " f" : ""));
+        if (k < r.n) {
+          sl.style.setProperty("--c", PAL[r.c]);
+          sl.appendChild(arrowSvg("#ffffff", 0));
+        }
+        rw.appendChild(sl);
+      }
+      tr.appendChild(rw);
+    });
+    const used = s.rows.filter((r) => r.n > 0).length;
+    if (used >= ROWS - 1) tr.classList.add("danger");
+    wrap.appendChild(tr);
+    trayEl = tr;
+    wrap.appendChild(h("div", "twarn", used >= ROWS ? "\u26A0 \u6536\u96C6\u69FD\u5DF2\u6EE1\uFF0C\u53EA\u80FD\u653E\u540C\u8272\uFF01" : used === ROWS - 1 ? "\u26A0 \u53EA\u5269 1 \u884C\u7A7A\u4F4D" : ""));
+    const cb = h("div", "combo", s.combo > 1 ? `COMBO \xD7${s.combo}` : "");
+    wrap.appendChild(cb);
+    comboEl = cb;
+    const fx = h("div", "fx");
+    wrap.appendChild(fx);
+    fxEl = fx;
+  };
+  const eBig = (t, cls) => {
+    const e = h("div", "eword " + cls, t);
+    wrap.appendChild(e);
+    setTimeout(() => e.remove(), 1100);
+  };
+  const eShake = (n) => {
+    wrap.animate([{ transform: "translate(0,0)" }, { transform: `translate(${-n}px,${n / 2}px)` }, { transform: `translate(${n}px,${-n / 2}px)` }, { transform: `translate(${-n / 2}px,0)` }, { transform: "translate(0,0)" }], { duration: 320 });
+  };
+  const eTapUI = (c, el) => {
+    const s = es;
+    if (!s || eBusy || s.over) return;
+    const a = s.g[c];
+    const col = a ? a.c : 0;
+    const dir = a ? a.d : 0;
+    const r = rel(el);
+    const o = eTap(s, c);
+    if (o.kind === "frozen") {
+      el.classList.remove("shake");
+      void el.offsetWidth;
+      el.classList.add("shake");
+      toast("\u51B0\u51BB\u4E2D\uFF1A\u518D\u98DE\u51FA " + a.f + " \u4E2A\u7BAD\u5934\u878D\u5316");
+      return;
+    }
+    if (o.kind === "block") {
+      el.classList.remove("shake");
+      void el.offsetWidth;
+      el.classList.add("shake");
+      const be = cellEls.get(o.blocker);
+      if (be) {
+        be.classList.remove("shake");
+        void be.offsetWidth;
+        be.classList.add("shake");
+      }
+      tone(160, 0.14, "square", 0.06, 0.7);
+      buzz(25);
+      return;
+    }
+    if (o.kind === "nofit") {
+      if (trayEl) {
+        trayEl.classList.remove("shake");
+        void trayEl.offsetWidth;
+        trayEl.classList.add("shake");
+      }
+      toast("\u6536\u96C6\u69FD\u653E\u4E0D\u4E0B\u8FD9\u4E2A\u989C\u8272");
+      buzz(40);
+      return;
+    }
+    if (o.kind === "unlock") {
+      tone(900, 0.1, "square", 0.05, 0.6);
+      eDraw(o.spawned);
+      eAfter();
+      return;
+    }
+    eBusy = true;
+    tone(480, 0.12, "triangle", 0.08, 1.8);
+    const ghost = h("div", "ghost");
+    ghost.style.left = r.x + "px";
+    ghost.style.top = r.y + "px";
+    ghost.style.width = r.w + "px";
+    ghost.style.height = r.h + "px";
+    ghost.style.setProperty("--c", PAL[col]);
+    ghost.appendChild(arrowSvg("#ffffff", dir));
+    el.classList.add("gone");
+    if (fxEl) fxEl.appendChild(ghost);
+    let sx = 0, sy = 0;
+    if (trayEl) {
+      const sl = trayEl.children[o.row].children[o.pos];
+      const q = rel(sl);
+      sx = q.x + q.w / 2 - r.x - r.w / 2;
+      sy = q.y + q.h / 2 - r.y - r.h / 2;
+    }
+    const kick = 40;
+    const an = ghost.animate([{ transform: "translate(0,0)" }, { transform: `translate(${DX[dir] * kick}px,${DY[dir] * kick}px)`, offset: 0.3 }, { transform: `translate(${sx}px,${sy}px) scale(.7)` }], { duration: 330, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" });
+    an.onfinish = () => {
+      if (dead || es !== s) return;
+      ghost.remove();
+      eBusy = false;
+      eDraw(o.spawned);
+      if (o.burst >= 0 && trayEl) {
+        const rw = trayEl.children[o.row];
+        for (let k = 0; k < ROWLEN; k++) {
+          const sl = rw.children[k];
+          sl.classList.add("f");
+          sl.style.setProperty("--c", PAL[col]);
+          sl.appendChild(arrowSvg("#ffffff", 0));
+        }
+        rw.classList.add("boom");
+        const rr = rel(rw);
+        for (let k = 0; k < ROWLEN; k++) particles(rr.x + rr.w * (k + 0.5) / ROWLEN, rr.y + rr.h / 2, PAL[col], 4 + Math.min(s.combo, 5) * 2);
+        setTimeout(() => {
+          for (let k = 0; k < ROWLEN; k++) {
+            const sl = rw.children[k];
+            sl.classList.remove("f");
+            sl.replaceChildren();
+          }
+        }, 380);
+        const base = 523 * Math.pow(2, Math.min(s.combo - 1, 8) / 12 * 2);
+        [0, 4, 7, 12].forEach((st, k) => setTimeout(() => tone(base * Math.pow(2, st / 12), 0.18, "sine", 0.13), k * 55));
+        const w = eWord(s.combo);
+        if (w) eBig(w, "c" + Math.min(s.combo, 4));
+        if (comboEl) {
+          comboEl.textContent = `+${o.pts}` + (s.combo > 1 ? ` \xB7 COMBO \xD7${s.combo}` : "");
+          comboEl.classList.add("pop");
+        }
+        eShake(Math.min(3 + s.combo * 2, 12));
+        buzz(30 + s.combo * 10);
+        const se = wrap.querySelector(".escore");
+        if (se) se.animate([{ transform: "scale(1.25)" }, { transform: "scale(1)" }], { duration: 300 });
+      }
+      if (o.clearTray) {
+        const f = h("div", "eflash");
+        wrap.appendChild(f);
+        setTimeout(() => f.remove(), 800);
+        eBig("\u6536\u96C6\u69FD\u6E05\u7A7A +300", "c5");
+      }
+      if (o.clearBoard) {
+        const f = h("div", "eflash");
+        wrap.appendChild(f);
+        setTimeout(() => f.remove(), 800);
+        eBig("\u6E05\u5C4F +1000", "c5");
+      }
+      eAfter();
+    };
+  };
+  const eAfter = () => {
+    const s = es;
+    if (!eRec && eBest0 > 0 && s.score > eBest0) {
+      eRec = true;
+      eBig("\u65B0\u7EAA\u5F55\uFF01", "c5");
+      [523, 659, 784, 1046, 1318].forEach((f, k) => setTimeout(() => tone(f, 0.22, "triangle", 0.12), k * 90));
+      const r = rel(wrap);
+      particles(r.w / 2, 90, "#f2b423", 30);
+      const rc = wrap.querySelector(".erec");
+      if (rc) {
+        rc.textContent = "\u{1F389} \u65B0\u7EAA\u5F55\uFF01";
+        rc.classList.add("new");
+      }
+    }
+    if (s.score > (save.eb || 0)) {
+      save.eb = s.score;
+      store(save);
+    }
+    if (s.over) setTimeout(() => eOver(), 450);
+  };
+  const eOver = () => {
+    const s = es;
+    if (!s || dead) return;
+    tone(300, 0.3, "sawtooth", 0.06, 0.6);
+    const why = s.over === "tray" ? "\u6536\u96C6\u69FD\u653E\u4E0D\u4E0B\u4E86" : "\u68CB\u76D8\u88AB\u586B\u6EE1\u4E86";
+    const md = h("div", "modal", `<h2>${why}</h2><div class="escore" style="margin:4px 0">${s.score}</div><div style="color:#8a7650">${eRec ? "\u{1F389} \u65B0\u7EAA\u5F55\uFF01" : "\u6700\u9AD8\u7EAA\u5F55 " + (save.eb || 0)} \xB7 \u6700\u9AD8 COMBO \xD7${Math.max(1, s.maxCombo)}</div>`);
+    const m = modal(md);
+    if (!s.revived) {
+      const b = h("button", "big red", "\u25B6 \u770B\u5E7F\u544A\u590D\u6D3B 1 \u6B21");
+      b.onclick = () => showAd("\u770B\u5B8C\u590D\u6D3B\u4E00\u6B21", () => {
+        m.remove();
+        eRevive(s);
+        eDraw([]);
+        if (s.over) eOver();
+      });
+      md.appendChild(b);
+    }
+    const again = h("button", "big", "\u518D\u6765\u4E00\u5C40 \u25B6");
+    again.onclick = () => {
+      m.remove();
+      ePlay();
+    };
+    const hm = h("button", "link", "\u8FD4\u56DE\u9996\u9875");
+    hm.onclick = () => {
+      es = null;
+      home();
+    };
+    md.appendChild(again);
+    md.appendChild(hm);
+    if (eRec) {
+      const r = rel(md);
+      particles(r.x + r.w / 2, r.y + 40, "#f2b423", 24);
+    }
   };
   home();
   return () => {
